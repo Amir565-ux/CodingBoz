@@ -1,0 +1,56 @@
+#!/bin/bash
+
+set -euo pipefail
+
+LIB_DIR="/opt/codingboz/lib"
+
+for lib_file in constants.sh ui.sh validate.sh network.sh cloudinit.sh xml.sh os.sh vps.sh; do
+    if [[ -f "$LIB_DIR/$lib_file" ]]; then
+        source "$LIB_DIR/$lib_file"
+    else
+        echo "ERROR: Missing library file: $LIB_DIR/$lib_file" >&2
+        echo "Run install.sh first." >&2
+        exit 1
+    fi
+done
+
+if [[ $EUID -ne 0 ]]; then
+    echo "ERROR: CodingBoz must be run as root." >&2
+    exit 1
+fi
+
+ensure_network
+
+main_menu() {
+    local choice
+    while true; do
+        draw_main_menu
+        choice=$(prompt "Select Option: ")
+        case "$choice" in
+            1) vps_menu ;;
+            0) clear_screen; echo "Goodbye."; exit 0 ;;
+            *) continue ;;
+        esac
+    done
+}
+
+vps_menu() {
+    local choice
+    while true; do
+        draw_vps_menu
+        choice=$(prompt "Select Option: ")
+        case "$choice" in
+            1) vps_create ;;
+            2) vps_start ;;
+            3) vps_stop ;;
+            4) vps_restart ;;
+            5) vps_delete ;;
+            6) vps_info ;;
+            7) continue ;;
+            0) return ;;
+            *) continue ;;
+        esac
+    done
+}
+
+main_menu
