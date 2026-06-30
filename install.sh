@@ -55,7 +55,6 @@ install_packages() {
                 virtinst \
                 genisoimage \
                 iptables \
-                jq \
                 > /dev/null 2>&1
             ;;
         *)
@@ -77,7 +76,24 @@ enable_services() {
 
 install_files() {
     local script_dir
-    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local is_tmp_dir=0
+
+    # Detect if script is running via pipe (e.g., bash <(curl ...))
+    if [[ "${BASH_SOURCE[0]}" == /dev/fd/* || "${BASH_SOURCE[0]}" == /proc/self/fd/* || "$0" == "bash" || "$0" == "/bin/bash" ]]; then
+        echo "[*] Detected piped execution. Cloning repository..."
+        script_dir=$(mktemp -d)
+        git clone https://github.com/USERNAME/CodingBoz.git "$script_dir/CodingBoz" > /dev/null 2>&1
+        if [[ $? -ne 0 ]]; then
+            echo "ERROR: Failed to clone repository. Ensure 'git' is installed and the URL is correct."
+            rm -rf "$script_dir"
+            exit 1
+        fi
+        script_dir="$script_dir/CodingBoz"
+        is_tmp_dir=1
+    else
+        # Running locally from directory
+        script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    fi
 
     echo "[*] Installing CodingBoz to /opt/codingboz..."
     mkdir -p /opt/codingboz
@@ -112,6 +128,11 @@ install_files() {
     cp "$script_dir/systemd/codingboz.service" /etc/systemd/system/codingboz.service
     systemctl daemon-reload
     systemctl enable codingboz.service >/dev/null 2>&1
+
+    # Cleanup cloned temp directory if it was created
+    if [[ $is_tmp_dir -eq 1 ]]; then
+        rm -rf "$(dirname "$script_dir")"
+    fi
 
     echo "[OK] Files installed."
 }
