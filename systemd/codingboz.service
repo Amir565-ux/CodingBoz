@@ -1,1 +1,12 @@
+[Unit]
+Description=CodingBoz VPS Port Forwarding Restore
+After=libvirtd.service network.target
+Requires=libvirtd.service
 
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash -c 'source /opt/codingboz/lib/constants.sh; source /opt/codingboz/lib/network.sh; restore_all_port_forwards'
+
+[Install]
+WantedBy=multi-user.target
