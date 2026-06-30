@@ -84,7 +84,7 @@ install_files() {
         script_dir=$(mktemp -d)
         git clone https://github.com/Amir565-ux/CodingBoz.git "$script_dir/CodingBoz" > /dev/null 2>&1
         if [[ $? -ne 0 ]]; then
-            echo "ERROR: Failed to clone repository. Ensure 'git' is installed and the URL is correct."
+            echo "ERROR: Failed to clone repository. Ensure the GitHub repository exists and is public."
             rm -rf "$script_dir"
             exit 1
         fi
