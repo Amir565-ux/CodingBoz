@@ -82,7 +82,7 @@ install_files() {
     if [[ "${BASH_SOURCE[0]}" == /dev/fd/* || "${BASH_SOURCE[0]}" == /proc/self/fd/* || "$0" == "bash" || "$0" == "/bin/bash" ]]; then
         echo "[*] Detected piped execution. Cloning repository..."
         script_dir=$(mktemp -d)
-        git clone https://github.com/USERNAME/CodingBoz.git "$script_dir/CodingBoz" > /dev/null 2>&1
+        git clone https://github.com/Amir565-ux/CodingBoz.git "$script_dir/CodingBoz" > /dev/null 2>&1
         if [[ $? -ne 0 ]]; then
             echo "ERROR: Failed to clone repository. Ensure 'git' is installed and the URL is correct."
             rm -rf "$script_dir"
