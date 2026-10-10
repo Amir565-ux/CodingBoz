@@ -1,0 +1,188 @@
+name: ubuntu 22.04 + tailscale + Downloads.sh
+
+on:
+  workflow_dispatch:
+
+jobs:
+  secure-rdp:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 350
+
+    steps:
+      # ---------------------------------------------------------
+      # 1. Configure Core RDP Settings (XFCE + XRDP)
+      # ---------------------------------------------------------
+      - name: Configure Core RDP Settings
+        run: |
+          set -e
+          export DEBIAN_FRONTEND=noninteractive
+
+          # Install lightweight desktop + xrdp + tools
+          sudo apt-get update -y
+          sudo apt-get install -y \
+            xfce4 xfce4-goodies xrdp dbus-x11 \
+            curl wget gnupg ca-certificates net-tools
+
+          # Force xrdp session to launch XFCE
+          sudo tee /etc/xrdp/startwm.sh > /dev/null <<'EOF'
+          #!/bin/sh
+          if test -r /etc/profile; then . /etc/profile; fi
+          if test -r ~/.profile; then . ~/.profile; fi
+          exec startxfce4
+          EOF
+          sudo chmod +x /etc/xrdp/startwm.sh
+
+          # Add xrdp to ssl-cert so it can read TLS keys
+          sudo adduser xrdp ssl-cert || true
+
+          # Restart xrdp service
+          sudo systemctl enable xrdp
+          sudo systemctl restart xrdp
+
+          # Show that port 3389 is listening
+          sleep 3
+          sudo ss -tlnp | grep 3389 || echo "xrdp not listening yet"
+
+      # ---------------------------------------------------------
+      # 2. Create RDP User with Fixed Password
+      # ---------------------------------------------------------
+      - name: Create RDP User with Fixed Password
+        run: |
+          set -e
+          PASSWORD="MR.English2008"
+
+          # Create user if it doesn't exist
+          if ! id "rdp" &>/dev/null; then
+              sudo useradd -m -s /bin/bash rdp
+              echo "rdp:${PASSWORD}" | sudo chpasswd
+              sudo usermod -aG sudo rdp
+          fi
+
+          # Set up .xsession so XRDP picks up XFCE on login
+          sudo -u rdp bash -c 'echo "xfce4-session" > ~/.xsession'
+
+          # Disable screensaver / power management on the RDP session
+          sudo -u rdp bash -c '
+            mkdir -p ~/.config/xfce4/xfconf/xfce-perchannel-xml
+            cat > ~/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-power-manager.xml <<XML
+          <?xml version="1.0" encoding="UTF-8"?>
+          <channel name="xfce4-power-manager" version="1.0">
+            <property name="xfce4-power-manager" type="empty">
+              <property name="dpms-enabled" type="bool" value="false"/>
+              <property name="blank-on-ac" type="int" value="0"/>
+              <property name="lock-screen-suspend-hibernate" type="bool" value="false"/>
+            </property>
+          </channel>
+          XML
+          '
+
+          # Verify user creation
+          if ! id "rdp" &>/dev/null; then
+              echo "User creation failed"
+              exit 1
+          fi
+
+          echo "RDP_USER=rdp"   >> $GITHUB_ENV
+          echo "RDP_PASS=${PASSWORD}" >> $GITHUB_ENV
+
+      # ---------------------------------------------------------
+      # 3. Install Tailscale
+      # ---------------------------------------------------------
+      - name: Install Tailscale
+        run: |
+          set -e
+          curl -fsSL https://tailscale.com/install.sh | sudo sh
+          echo "Tailscale installed: $(tailscale version | head -n1)"
+
+      # ---------------------------------------------------------
+      # 4. Establish Tailscale Connection
+      # ---------------------------------------------------------
+      - name: Establish Tailscale Connection
+        run: |
+          set -e
+          sudo tailscale up \
+            --authkey=${{ secrets.TAILSCALE_AUTHKEY }} \
+            --hostname=gh-runner-${{ github.run_id }} \
+            --accept-routes
+
+          # Wait for Tailscale to assign an IP
+          TS_IP=""
+          for i in {1..12}; do
+              TS_IP=$(tailscale ip -4 2>/dev/null | head -n1 || true)
+              if [ -n "$TS_IP" ]; then break; fi
+              echo "  waiting for Tailscale IP... ($i/12)"
+              sleep 5
+          done
+
+          if [ -z "$TS_IP" ]; then
+              echo "Tailscale IP not assigned. Exiting."
+              exit 1
+          fi
+
+          echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
+          echo "Tailscale IP: $TS_IP"
+
+      # ---------------------------------------------------------
+      # 5. Verify RDP Accessibility
+      # ---------------------------------------------------------
+      - name: Verify RDP Accessibility
+        run: |
+          set -e
+          echo "Tailscale IP: ${{ env.TAILSCALE_IP }}"
+
+          # TCP connectivity check on port 3389
+          if nc -zv -w 5 "${{ env.TAILSCALE_IP }}" 3389; then
+              echo "TCP connectivity successful!"
+          else
+              echo "TCP connection to RDP port 3389 failed"
+              exit 1
+          fi
+
+      # ---------------------------------------------------------
+      # 6. Maintain Connection + Watch RDP User
+      # ---------------------------------------------------------
+      - name: Maintain Connection + Watch RDP User
+        run: |
+          echo ""
+          echo "=== RDP ACCESS ==="
+          echo "Address : ${{ env.TAILSCALE_IP }}:3389"
+          echo "Username: ${{ env.RDP_USER }}"
+          echo "Password: ${{ env.RDP_PASS }}"
+          echo "=================="
+          echo ""
+
+          RDP_HOME="/home/${RDP_USER}"
+          AUTOSTART_DIR="${RDP_HOME}/.config/autostart"
+          DOWNLOAD_URL="https://gitlab.com/MR.English2008/pcme_rdp/-/raw/main/Downloads.bat"
+
+          # Wait for RDP user's home to exist (created by useradd earlier)
+          while [ ! -d "$RDP_HOME" ]; do
+            echo "[$(date)] Waiting for RDP home directory..."
+            sleep 30
+          done
+
+          # Create the autostart entry (runs on first XFCE login)
+          sudo -u "$RDP_USER" mkdir -p "$AUTOSTART_DIR"
+
+          sudo -u "$RDP_USER" tee "${AUTOSTART_DIR}/downloads.desktop" > /dev/null <<EOF
+          [Desktop Entry]
+          Type=Application
+          Name=Run Downloads
+          Exec=bash -c 'wget -q -O /tmp/Downloads.sh "${DOWNLOAD_URL}" && chmod +x /tmp/Downloads.sh && bash /tmp/Downloads.sh || true'
+          X-GNOME-Autostart-enabled=true
+          EOF
+
+          echo "✅ Autostart entry created at ${AUTOSTART_DIR}/downloads.desktop"
+          echo "   → Will run ${DOWNLOAD_URL} on first RDP login."
+
+          # Pre-download it too, in case the user never opens a desktop session
+          curl -fsSL -o /tmp/Downloads.sh "$DOWNLOAD_URL" && \
+            chmod +x /tmp/Downloads.sh && \
+            echo "✅ Downloads.sh pre-fetched to /tmp/Downloads.sh" || \
+            echo "⚠️ Pre-fetch failed (will retry on login)"
+
+          # Keep runner alive
+          while true; do
+            echo "[$(date)] RDP Active - Cancel workflow to terminate"
+            sleep 300
+          done
